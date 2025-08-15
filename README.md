@@ -37,7 +37,7 @@ myproject/
 
 
 
-cd ~/holberton/demoday/next-graph-app
+cd /demoday/next-graph-app
 
 
 npm install
