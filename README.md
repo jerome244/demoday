@@ -35,7 +35,21 @@ myproject/
    └─ tests.py
 
 
+install venv first
 
+then pip install -r requirements.txt
+
+
+
+
+launch django server: 
+
+python manage.py runserver
+
+
+
+
+launch next.js:
 
 cd /demoday/next-graph-app
 
@@ -46,5 +60,7 @@ npm install
 npm i -D @types/cytoscape
 
 
-
 npm run dev
+
+
+
