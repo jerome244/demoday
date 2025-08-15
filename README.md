@@ -48,6 +48,9 @@ python manage.py runserver
 
 
 
+
+
+
 launch next.js:
 
 cd /demoday/next-graph-app
