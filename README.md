@@ -42,7 +42,6 @@ myproject/
 
 
 
-
 install venv first
 
 then pip install -r requirements.txt
