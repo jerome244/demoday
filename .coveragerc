@@ -1,0 +1,15 @@
+# .coveragerc
+[run]
+branch = True
+omit =
+    */migrations/*
+    */tests/*
+    */admin.py
+    */apps.py
+    */urls.py
+    community/utls.py
+    community/tests/tests_models.py
+
+[report]
+skip_covered = True
+show_missing = True
