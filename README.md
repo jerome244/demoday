@@ -41,7 +41,6 @@ then pip install -r requirements.txt
 
 
 
-
 launch django server: 
 
 python manage.py runserver
