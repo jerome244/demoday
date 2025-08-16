@@ -1,14 +1,23 @@
-# Python
+# Node / Next
+node_modules/
+.next/
+out/
+.vercel/
+
+# Python / Django
 __pycache__/
 *.py[cod]
-*.egg-info/
-.env
 .venv/
 venv/
-# Django
 db.sqlite3
-media/
-staticfiles/
-# OS
+
+# Env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# OS / editors
 .DS_Store
-Thumbs.db
+.vscode/
+.idea/

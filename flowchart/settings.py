@@ -17,6 +17,8 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     # third-party
     "rest_framework",
+    "rest_framework_simplejwt",
+    "djoser",
     # local apps
     "community",
     "codeparsers",
@@ -67,7 +69,11 @@ DATABASES = {
 }
 
 
-
+# Optional but recommended
+DJOSER = {
+    "USER_ID_FIELD": "id",
+    # "LOGIN_FIELD": "email",  # if you want email login
+}
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
