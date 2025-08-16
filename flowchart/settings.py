@@ -17,14 +17,14 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     # third-party
     "rest_framework",
-    "corsheaders",
     # local apps
     "community",
     "codeparsers",
+    "channels",
+
 ]
 
 MIDDLEWARE = [
-    "corsheaders.middleware.CorsMiddleware",  # put CORS near the top
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -34,8 +34,6 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-
-CORS_ALLOW_ALL_ORIGINS = True
 ROOT_URLCONF = "flowchart.urls"
 
 TEMPLATES = [
@@ -59,10 +57,17 @@ ASGI_APPLICATION = "flowchart.asgi.application"
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "appdb",
+        "USER": "appuser",
+        "PASSWORD": "0",      # <-- must match step 1
+        "HOST": "127.0.0.1",
+        "PORT": "5432",
     }
 }
+
+
+
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
@@ -87,25 +92,20 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "community.User"
 
 REST_FRAMEWORK = {
-    "DEFAULT_PERMISSION_CLASSES": (
-        "rest_framework.permissions.IsAuthenticatedOrReadOnly",
-    ),
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
-    "DEFAULT_THROTTLE_CLASSES": [
-        "rest_framework.throttling.AnonRateThrottle",
-        "rest_framework.throttling.UserRateThrottle",
-    ],
-    "DEFAULT_THROTTLE_RATES": {"anon": "100/hour", "user": "1000/hour"},
-    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
-    "PAGE_SIZE": 20,
 }
 
-REST_FRAMEWORK.update({
-    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
-})
-SPECTACULAR_SETTINGS = {
-    "TITLE": "Flowchart API",
-    "VERSION": "v2",
+
+# settings.py
+CHANNEL_LAYERS = {
+    "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}
 }
+
+# settings.py
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+
+MONGO_URI = "mongodb://localhost:27017"
+MONGO_DB_NAME = "appdb"
+PRESENCE_TTL_SECONDS = 300  # auto-expire stale presence after 5 min

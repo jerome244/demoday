@@ -1,89 +1,14 @@
-# --- OS / Editors ---
-.DS_Store
-Thumbs.db
-.idea/
-.vscode/*
-!.vscode/extensions.json
-!.vscode/settings.json
-
-# --- General ---
-*.log
-logs/
-*.tmp
-*.swp
-*.swo
-*.orig
-
-# --- Env files (keep examples) ---
-.env
-.env.*
-!.env.example
-!.env.local.example
-
-# --- Node / Next.js ---
-node_modules/
-.next/
-out/
-.vercel/
-.turbo/
-.swc/
-.eslintcache
-coverage/
-# keep lockfiles (recommended)
-# !package-lock.json
-# !yarn.lock
-# !pnpm-lock.yaml
-
-# --- Frontend build artifacts ---
-dist/
-.cache/
-
-# --- Python / Django ---
+# Python
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
-*.so
-*.egg
 *.egg-info/
-.eggs/
-build/
-develop-eggs/
-dist/
-wheels/
-pip-wheel-metadata/
-.share/
-.python-version
-
-# Virtual envs
+.env
 .venv/
 venv/
-env/
-ENV/
-
-# Type check / test caches
-.mypy_cache/
-.pytype/
-.pytest_cache/
-.ruff_cache/
-.coverage
-.coverage.*
-htmlcov/
-
-# Django runtime files
+# Django
 db.sqlite3
-*.sqlite3
-/media/
-# collectstatic output (adjust to your STATIC_ROOT if different)
+media/
 staticfiles/
-static_root/
-
-# --- Tools / CI ---
-.tox/
-.nox/
-pytestdebug.log
-
-# --- Optional archives (uncomment if you don’t want large zips in repo) ---
-# *.zip
-# *.tar
-# *.tar.gz
+# OS
+.DS_Store
+Thumbs.db

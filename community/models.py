@@ -3,7 +3,6 @@ from __future__ import annotations
 import io
 import zipfile
 from datetime import timedelta
-import uuid
 
 import jwt
 from django.conf import settings
@@ -155,8 +154,7 @@ class Conversation(models.Model):
 
     @transaction.atomic
     def add_message(self, sender: User, content: str) -> "PrivateMessage":
-        # FIX: ensure sender is part of the conversation
-        if sender.pk not in (self.user1_id, self.user2_id):
+        if sender_id := sender.pk not in (self.user1_id, self.user2_id):
             raise ValueError("Sender must be participant of the conversation.")
         receiver = self.user2 if sender.pk == self.user1_id else self.user1
         pm = PrivateMessage.objects.create(conversation=self, sender=sender, receiver=receiver, content=content)
@@ -200,7 +198,6 @@ class Project(models.Model):
     participants = models.ManyToManyField(User, related_name="projects", blank=True)
     liked_by = models.ManyToManyField(User, related_name="liked_projects", blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    saved_by = models.ManyToManyField("community.User", related_name="saved_projects", blank=True)
 
     def __str__(self) -> str:
         return self.name
@@ -232,18 +229,12 @@ class Project(models.Model):
         if self.liked_by.filter(pk=user.pk).exists():
             return f"{user.name or user.username} has already liked the project."
         self.liked_by.add(user)
-        # NEW: notify owner on like (skip self-like notify)
-        if user != self.creator:
-            self.creator.add_notification(f"{user.name or user.username} liked your project '{self.name}'.")
         return f"{user.name or user.username} liked the project '{self.name}'."
 
     def unlike(self, user: User) -> str:
         if not self.liked_by.filter(pk=user.pk).exists():
             return f"{user.name or user.username} has not liked the project yet."
         self.liked_by.remove(user)
-        # OPTIONAL: notify owner on unlike (comment out if undesired)
-        if user != self.creator:
-            self.creator.add_notification(f"{user.name or user.username} unliked your project '{self.name}'.")
         return f"{user.name or user.username} unliked the project '{self.name}'."
 
     def delete_with_notifications(self) -> None:
@@ -302,19 +293,6 @@ class Project(models.Model):
                 count += 1
         return count
 
-    # convenience methods
-    def save_for(self, user):
-        if not self.saved_by.filter(pk=user.pk).exists():
-            self.saved_by.add(user)
-            return f"{user.name or user.username} saved project '{self.name}'."
-        return f"{user.name or user.username} already saved this project."
-
-    def unsave_for(self, user):
-        if self.saved_by.filter(pk=user.pk).exists():
-            self.saved_by.remove(user)
-            return f"{user.name or user.username} removed saved project '{self.name}'."
-        return f"{user.name or user.username} had not saved this project."
-
 
 class ProjectFile(models.Model):
     project = models.ForeignKey(Project, related_name="files", on_delete=models.CASCADE)
@@ -328,65 +306,15 @@ class ProjectFile(models.Model):
         return f"{self.project.name}:{self.path}"
 
 
-class ProjectInvitation(models.Model):
-    class Status(models.TextChoices):
-        PENDING = "PENDING", "Pending"
-        ACCEPTED = "ACCEPTED", "Accepted"
-        DECLINED = "DECLINED", "Declined"
-        REVOKED = "REVOKED", "Revoked"
-
-    project = models.ForeignKey(Project, related_name="invitations", on_delete=models.CASCADE)
-    inviter = models.ForeignKey("community.User", related_name="sent_project_invitations", on_delete=models.CASCADE)
-    invitee = models.ForeignKey("community.User", related_name="received_project_invitations", on_delete=models.CASCADE)
-    message = models.CharField(max_length=500, blank=True)
-    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
-    token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
-    created_at = models.DateTimeField(auto_now_add=True)
-    responded_at = models.DateTimeField(null=True, blank=True)
+class Presence(models.Model):
+    project = models.ForeignKey("community.Project", on_delete=models.CASCADE, db_index=True)
+    user_id = models.IntegerField()
+    name = models.CharField(max_length=150)
+    color = models.CharField(max_length=32, default="")
+    x = models.FloatField(default=0.5)
+    y = models.FloatField(default=0.5)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        constraints = [
-            # only one *pending* invite per (project, invitee)
-            models.UniqueConstraint(
-                fields=["project", "invitee"],
-                condition=Q(status="PENDING"),
-                name="unique_pending_invite_per_project_invitee",
-            )
-        ]
-
-    def __str__(self):
-        return f"Invite({self.project.name} → {self.invitee} : {self.status})"
-
-    # Domain helpers
-    def accept(self, actor):
-        if actor != self.invitee and not actor.is_staff:
-            raise PermissionError("Only the invitee (or staff) can accept.")
-        if self.status != self.Status.PENDING:
-            raise ValueError("Invitation is not pending.")
-        self.status = self.Status.ACCEPTED
-        self.responded_at = timezone.now()
-        self.save(update_fields=["status", "responded_at"])
-        self.project.add_participant(self.invitee)
-        self.inviter.add_notification(f"{self.invitee} accepted your invitation to '{self.project.name}'.")
-        self.invitee.add_notification(f"You joined project '{self.project.name}'.")
-
-    def decline(self, actor):
-        if actor != self.invitee and not actor.is_staff:
-            raise PermissionError("Only the invitee (or staff) can decline.")
-        if self.status != self.Status.PENDING:
-            raise ValueError("Invitation is not pending.")
-        self.status = self.Status.DECLINED
-        self.responded_at = timezone.now()
-        self.save(update_fields=["status", "responded_at"])
-        self.inviter.add_notification(f"{self.invitee} declined your invitation to '{self.project.name}'.")
-
-    def revoke(self, actor):
-        is_owner = actor == self.inviter or actor == self.project.creator or actor.is_staff
-        if not is_owner:
-            raise PermissionError("Only inviter, project creator, or staff can revoke.")
-        if self.status != self.Status.PENDING:
-            raise ValueError("Invitation is not pending.")
-        self.status = self.Status.REVOKED
-        self.responded_at = timezone.now()
-        self.save(update_fields=["status", "responded_at"])
-        self.invitee.add_notification(f"Your invitation to '{self.project.name}' was revoked.")
+        unique_together = [("project", "user_id")]
+        indexes = [models.Index(fields=["project", "updated_at"])]

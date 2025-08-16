@@ -5,204 +5,118 @@ from typing import Dict, List, Any
 
 logger = logging.getLogger(__name__)
 
-
-def _append_unique(bucket: Dict[str, List[Dict[str, Any]]], key: str, item: Dict[str, Any]) -> None:
-    lst = bucket.setdefault(key, [])
-    if item not in lst:
-        lst.append(item)
-
-# codeparsers/parsers.py
 class PythonParser:
-    def __init__(self, file_name, file_content):
+    def __init__(self, file_name: str, file_content: str):
         self.file_name = file_name
         self.file_content = file_content
+        logger.debug("Parsing Python file: %s", self.file_name)
         self.tree = ast.parse(file_content)
+        self.function_definitions: List[Dict[str, Any]] = []
+        self.lambda_functions: List[Dict[str, Any]] = []
+        self.function_calls: Dict[str, List[Dict[str, Any]]] = {}
+        self.comments: List[Dict[str, Any]] = []
 
-        self.function_definitions = []   # [{name,line,end_line,word_count,docstring,file}]
-        self.lambda_functions = []       # [{name:'lambda', line, file}]
-        self.function_calls = {}         # {callee: [{file,line,caller}]}
-        self.calls = []                  # edges list: [{caller, callee, line, kind, text, file}]
-        self.comments = []               # [{line, comment, file}]
-        self.imports = []                # [{type,module,names,level,line,file}]
-
-    def parse(self):
+    def parse(self) -> None:
         self._parse_function_definitions()
         self._parse_lambda_functions()
-        self._parse_function_calls_and_imports()
+        self._parse_function_calls()
         self._parse_comments()
 
-    # ---------- helpers
-    def _src_seg(self, node):
-        try:
-            return ast.get_source_segment(self.file_content, node) or ""
-        except Exception:
-            return ""
-
-    def _slice(self, start, end):
-        lines = self.file_content.splitlines()
-        start = max(1, start); end = max(start, end or start)
-        return "\n".join(lines[start-1:end])
-
-    def _words(self, text):
-        return len(re.findall(r"\b\w+\b", text))
-
-    # ---------- defs
-    def _parse_function_definitions(self):
+    def _parse_function_definitions(self) -> None:
         for node in ast.walk(self.tree):
             if isinstance(node, ast.FunctionDef):
-                start = getattr(node, "lineno", None)
-                end = getattr(node, "end_lineno", start)
-                body_text = self._slice(start, end)
                 self.function_definitions.append({
                     "name": node.name,
-                    "line": start,
-                    "end_line": end,
-                    "word_count": self._words(body_text),
-                    "docstring": ast.get_docstring(node) or "",
-                    "file": self.file_name,
+                    "line": node.lineno,
                 })
 
-    # ---------- lambdas
-    def _parse_lambda_functions(self):
+    def _parse_lambda_functions(self) -> None:
         for node in ast.walk(self.tree):
             if isinstance(node, ast.Lambda):
                 self.lambda_functions.append({
                     "name": "lambda",
-                    "line": getattr(node, "lineno", None),
-                    "file": self.file_name,
+                    "line": node.lineno,
                 })
 
-    # ---------- calls + imports
-    def _parse_function_calls_and_imports(self):
-        class Walker(ast.NodeVisitor):
-            def __init__(self, outer):
-                self.o = outer
-                self.stack = []
-
-            def visit_FunctionDef(self, node):
-                self.stack.append(node.name)
-                self.generic_visit(node)
-                self.stack.pop()
-
-            visit_AsyncFunctionDef = visit_FunctionDef
-
-            # imports
-            def visit_Import(self, node):
-                self.o.imports.append({
-                    "type": "import",
-                    "module": None,
-                    "names": [a.name for a in node.names],
-                    "level": 0,
-                    "line": getattr(node, "lineno", None),
-                    "file": self.o.file_name,
-                })
-
-            def visit_ImportFrom(self, node):
-                self.o.imports.append({
-                    "type": "from",
-                    "module": node.module,
-                    "names": [a.name for a in node.names],
-                    "level": getattr(node, "level", 0) or 0,
-                    "line": getattr(node, "lineno", None),
-                    "file": self.o.file_name,
-                })
-
-            # calls
-            def visit_Call(self, node):
-                line = getattr(node, "lineno", None)
-                caller = self.stack[-1] if self.stack else None
-
-                callee, kind = None, "name"
+    def _parse_function_calls(self) -> None:
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.Call):
                 if isinstance(node.func, ast.Name):
-                    callee = node.func.id
-                elif isinstance(node.func, ast.Attribute):
-                    callee, kind = node.func.attr, "attribute"
+                    called_function = node.func.id
+                elif hasattr(node.func, "attr"):  # e.g. obj.method()
+                    called_function = node.func.attr
                 else:
-                    kind = type(node.func).__name__
-
-                rec = {
-                    "file": self.o.file_name,
-                    "line": line,
-                    "caller": caller,
-                    "callee": callee,
-                    "kind": kind,
-                    "text": self.o._src_seg(node),
-                }
-                self.o.calls.append(rec)
-                if callee:
-                    self.o.function_calls.setdefault(callee, []).append({
-                        "file": self.o.file_name,
-                        "line": line,
-                        "caller": caller,
-                    })
-                self.generic_visit(node)
-
-        Walker(self).visit(self.tree)
-
-    # ---------- comments
-    def _parse_comments(self):
-        for i, line in enumerate(self.file_content.splitlines(), start=1):
-            if "#" in line:
-                self.comments.append({
-                    "line": i,
-                    "comment": line.split("#", 1)[1].strip(),
+                    continue
+                self.function_calls.setdefault(called_function, []).append({
                     "file": self.file_name,
+                    "line": node.lineno,
                 })
 
-    def get_python_relations(self):
+    def _parse_comments(self) -> None:
+        lines = self.file_content.splitlines()
+        for lineno, line in enumerate(lines, start=1):
+            stripped_line = line.strip()
+            if "#" in stripped_line:
+                comment = stripped_line.split("#", 1)[1].strip()
+                logger.debug("Detected comment on %s:%d -> %s", self.file_name, lineno, comment)
+                self.comments.append({"line": lineno, "comment": comment})
+
+    def get_python_relations(self) -> Dict[str, Any]:
         return {
             "defined": self.function_definitions,
             "lambda_functions": self.lambda_functions,
             "called": self.function_calls,
-            "calls": self.calls,
-            "imports": self.imports,
             "comments": self.comments,
         }
 
+
 class CParser:
-    def __init__(self, file_name, file_content, all_files):
+    def __init__(self, file_name: str, file_content: str, all_files: Dict[str, str]):
         self.file_name = file_name
         self.file_content = file_content
         self.all_files = all_files
-        self.function_definitions = []
-        self.function_calls = {}
-        self.function_pointers = []
-        self.comments = []
+        self.function_definitions: List[Dict[str, Any]] = []
+        self.function_calls: Dict[str, List[Dict[str, Any]]] = {}
+        self.function_pointers: List[Dict[str, Any]] = []
+        self.comments: List[Dict[str, Any]] = []
 
-    def parse(self):
+    def parse(self) -> None:
         self._parse_function_definitions()
         self._parse_function_calls()
         self._parse_function_pointers()
         self._parse_comments()
 
-    def _parse_function_definitions(self):
-        for i, line in enumerate(self.file_content.splitlines(), start=1):
-            m = re.search(r"\b([A-Za-z_]\w*)\s*\([^)]*\)\s*{", line)
-            if m:
-                self.function_definitions.append({"name": m.group(1), "line": i, "file": self.file_name})
+    def _parse_function_definitions(self) -> None:
+        function_defs = re.findall(r"\w+\s+\w+\s*\([^)]*\)\s*{", self.file_content)
+        for func in function_defs:
+            func_name = func.split("(")[0].split()[-1]
+            self.function_definitions.append({"name": func_name})
 
-    def _parse_function_calls(self):
-        for i, line in enumerate(self.file_content.splitlines(), start=1):
-            for call in re.findall(r"\b([A-Za-z_]\w*)\s*\(", line):
-                self.function_calls.setdefault(call, []).append({"file": self.file_name, "line": i})
+    def _parse_function_calls(self) -> None:
+        function_calls = re.findall(r"(\w+)\s*\(", self.file_content)
+        for call in function_calls:
+            self.function_calls.setdefault(call, []).append({"file": self.file_name})
 
-    def _parse_function_pointers(self):
-        assigns = re.findall(r"\s*\(\*\s*(\w+)\s*\)\s*\(\)\s*=\s*(\w+)\s*;", self.file_content)
-        for ptr, func in assigns:
+    def _parse_function_pointers(self) -> None:
+        pointer_assignments = re.findall(r"\s*\(\*\s*(\w+)\s*\)\s*\(\)\s*=\s*(\w+)\s*;", self.file_content)
+        for ptr, func in pointer_assignments:
             self.function_pointers.append({"pointer": ptr, "function": func, "file": self.file_name})
-        for i, line in enumerate(self.file_content.splitlines(), start=1):
-            for ptr in re.findall(r"\b([A-Za-z_]\w*)\s*\(\)\s*;", line):
-                self.function_pointers.append({"pointer": ptr, "file": self.file_name, "line": i})
 
-    def _parse_comments(self):
-        for i, line in enumerate(self.file_content.splitlines(), start=1):
-            m = re.search(r"//(.*)", line)
-            if m:
-                self.comments.append({"line": i, "comment": m.group(1).strip()})
-        for i, m in enumerate(re.findall(r"/\*.*?\*/", self.file_content, re.DOTALL), start=1):
-            self.comments.append({"line": i, "comment": m.strip()})
+        pointer_calls = re.findall(r"(\w+)\s*\(\)\s*;", self.file_content)
+        for ptr in pointer_calls:
+            self.function_pointers.append({"pointer": ptr, "file": self.file_name})
 
-    def get_c_relations(self):
+    def _parse_comments(self) -> None:
+        # Single-line // comments
+        for match in re.finditer(r"//(.*)", self.file_content):
+            line = self.file_content.count("\n", 0, match.start()) + 1
+            self.comments.append({"line": line, "comment": match.group(1).strip()})
+        # Multi-line /* ... */
+        for match in re.finditer(r"/\*.*?\*/", self.file_content, re.DOTALL):
+            line = self.file_content.count("\n", 0, match.start()) + 1
+            self.comments.append({"line": line, "comment": match.group(0).strip()})
+
+    def get_c_relations(self) -> Dict[str, Any]:
         return {
             "defined": self.function_definitions,
             "called": self.function_calls,
@@ -226,27 +140,34 @@ class CssParser:
         self._parse_selectors()
         self._parse_comments()
 
-    # in CssParser._parse_selectors
     def _parse_selectors(self) -> None:
-        selector_pattern = r'([a-zA-Z0-9\s\.\#\-\:\,\>\+\~]+)\s*\{(.*?)\}'
-        matches = re.findall(selector_pattern, self.file_content, re.DOTALL)
-        for selector, properties in matches:
+        """
+        Extract selectors and properties, but also collect *all* class/id tokens
+        that appear anywhere in the selector list (handles commas, combinators,
+        and pseudo-classes).
+        """
+        # Match "selector_block { ... }" broadly (selectors can have commas/newlines)
+        for selector_block, properties in re.findall(r'([^{]+)\{(.*?)\}', self.file_content, re.DOTALL):
+            selector_block = selector_block.strip()
             properties_dict = self._parse_properties(properties)
-            selector_clean = selector.strip()
-            self.selectors.append({"selector": selector_clean, "properties": properties_dict})
 
-            # NEW: extract all .classes and #ids from the full selector string
-            class_tokens = re.findall(r'\.([A-Za-z_][\w\-]*)', selector_clean)
-            id_tokens    = re.findall(r'\#([A-Za-z_][\w\-]*)', selector_clean)
+            # Keep the raw selector block as-is for debugging
+            self.selectors.append({"selector": selector_block, "properties": properties_dict})
 
-            for cls in class_tokens:
-                s = f".{cls}"
-                if s not in self.class_selectors:
-                    self.class_selectors.append(s)
-            for ident in id_tokens:
-                s = f"#{ident}"
-                if s not in self.id_selectors:
-                    self.id_selectors.append(s)
+            # Split by comma to handle ".a, .b, div .c"
+            for sel in (s.strip() for s in selector_block.split(",")):
+                if not sel:
+                    continue
+                # Find ALL class tokens like ".btn", ".test-2" (ignore pseudo like :hover by stopping at ':')
+                for cls in re.findall(r'\.([A-Za-z_-][A-Za-z0-9_-]*)', sel):
+                    token = f".{cls}"
+                    if token not in self.class_selectors:
+                        self.class_selectors.append(token)
+                # Find ALL id tokens like "#hero"
+                for i in re.findall(r'#([A-Za-z_-][A-Za-z0-9_-]*)', sel):
+                    token = f"#{i}"
+                    if token not in self.id_selectors:
+                        self.id_selectors.append(token)
 
     def _parse_properties(self, properties_string: str) -> Dict[str, str]:
         properties: Dict[str, str] = {}
@@ -261,30 +182,22 @@ class CssParser:
 
     def match_html_tags(self, html_parsers: List["HtmlParser"]) -> None:
         for html_parser in html_parsers:
-            for tag in html_parser.tags:
-                attrs = tag["attributes"]
-                classes = set((attrs.get("class") or "").split())
-
-                # class selectors
-                for selector in self.class_selectors:
-                    cls_name = selector[1:]
-                    if cls_name in classes:
-                        _append_unique(self.matched_html, selector, {
+            for selector in self.class_selectors:
+                for tag in html_parser.tags:
+                    if tag["attributes"].get("class") == selector[1:]:
+                        self.matched_html.setdefault(selector, []).append({
                             "html_file": html_parser.file_name,
                             "tag": tag["tag"],
-                            "attributes": attrs,
+                            "attributes": tag["attributes"],
                         })
-
-                # id selectors
-                tid = attrs.get("id")
-                if tid:
-                    for selector in self.id_selectors:
-                        if tid == selector[1:]:
-                            _append_unique(self.matched_html, selector, {
-                                "html_file": html_parser.file_name,
-                                "tag": tag["tag"],
-                                "attributes": attrs,
-                            })
+            for selector in self.id_selectors:
+                for tag in html_parser.tags:
+                    if tag["attributes"].get("id") == selector[1:]:
+                        self.matched_html.setdefault(selector, []).append({
+                            "html_file": html_parser.file_name,
+                            "tag": tag["tag"],
+                            "attributes": tag["attributes"],
+                        })
 
     def get_css_relations(self) -> Dict[str, Any]:
         return {
@@ -318,15 +231,13 @@ class HtmlParser:
         for tag, attributes in re.findall(r"<([a-zA-Z0-9\-]+)([^>]*)>", self.file_content):
             self.tags.append({"tag": tag, "attributes": self._parse_attributes(attributes)})
 
-    # in HtmlParser._parse_attributes
     def _parse_attributes(self, attributes_string: str) -> Dict[str, str]:
         attrs: Dict[str, str] = {}
-        # supports key="value" or key='value'
-        pattern = r'([a-zA-Z0-9_\-:]+)\s*=\s*(?:"([^"]*)"|\'([^\']*)\')'
-        for m in re.finditer(pattern, attributes_string):
-            key = m.group(1)
-            val = m.group(2) if m.group(2) is not None else m.group(3) or ""
-            attrs[key] = val
+        # supports data-attrs and single/double quotes
+        for m in re.finditer(r'([a-zA-Z\-]+)\s*=\s*("([^"]*)"|\'([^\']*)\')', attributes_string):
+            name = m.group(1)
+            val = m.group(3) if m.group(3) is not None else m.group(4) or ""
+            attrs[name] = val
         return attrs
 
     def _parse_comments(self) -> None:
@@ -341,35 +252,39 @@ class HtmlParser:
         for style in re.findall(r"<style.*?>(.*?)</style>", self.file_content, re.DOTALL):
             self.styles.append(style)
 
-    def _match_css(self, css_parsers: List["CssParser"]) -> None:
+    def _match_css(self, css_parsers: List[CssParser]) -> None:
+        # Precompute classes/ids present in this HTML file per tag
         for css_parser in css_parsers:
-            rel = css_parser.get_css_relations()
-            class_selectors = rel["class_selectors"]
-            id_selectors = rel["id_selectors"]
+            css_rel = css_parser.get_css_relations()
+
+            css_classes = set(css_rel.get("class_selectors", []))  # e.g. {".btn", ".test"}
+            css_ids     = set(css_rel.get("id_selectors", []))     # e.g. {"#hero"}
 
             for tag in self.tags:
-                attrs = tag["attributes"]
-                classes = set((attrs.get("class") or "").split())
+                # support both class and className (JSX)
+                raw_class = tag["attributes"].get("class") or tag["attributes"].get("className") or ""
+                class_tokens = [c for c in raw_class.split() if c]  # split on whitespace
 
-                # class selectors
-                for selector in class_selectors:
-                    if selector[1:] in classes:
-                        _append_unique(self.matched_css, selector, {
+                # For each class on the element, see if ".<class>" is declared in CSS
+                for c in class_tokens:
+                    tok = f".{c}"
+                    if tok in css_classes:
+                        self.matched_css.setdefault(tok, []).append({
                             "file": self.file_name,
                             "tag": tag["tag"],
-                            "attributes": attrs,
+                            "attributes": tag["attributes"],
                         })
 
-                # id selectors
-                tid = attrs.get("id")
-                if tid:
-                    for selector in id_selectors:
-                        if tid == selector[1:]:
-                            _append_unique(self.matched_css, selector, {
-                                "file": self.file_name,
-                                "tag": tag["tag"],
-                                "attributes": attrs,
-                            })
+                # IDs are single-valued; match if "#<id>" exists
+                raw_id = tag["attributes"].get("id", "")
+                if raw_id:
+                    tok = f"#{raw_id}"
+                    if tok in css_ids:
+                        self.matched_css.setdefault(tok, []).append({
+                            "file": self.file_name,
+                            "tag": tag["tag"],
+                            "attributes": tag["attributes"],
+                        })
 
     def get_html_relations(self) -> Dict[str, Any]:
         return {
@@ -382,45 +297,42 @@ class HtmlParser:
 
 
 class JsParser:
-    def __init__(self, file_name, file_content, all_files):
+    def __init__(self, file_name: str, file_content: str, all_files: Dict[str, str]):
         self.file_name = file_name
         self.file_content = file_content
         self.all_files = all_files
-        self.function_definitions = []
-        self.function_calls = {}
-        self.arrow_functions = []
-        self.comments = []
+        self.function_definitions: List[Dict[str, Any]] = []
+        self.function_calls: Dict[str, List[Dict[str, Any]]] = {}
+        self.arrow_functions: List[Dict[str, Any]] = []
+        self.comments: List[Dict[str, Any]] = []
 
-    def parse(self):
+    def parse(self) -> None:
         self._parse_function_definitions()
         self._parse_arrow_functions()
         self._parse_function_calls()
         self._parse_comments()
 
-    def _parse_function_definitions(self):
-        for i, line in enumerate(self.file_content.splitlines(), start=1):
-            for fn in re.findall(r"\bfunction\s+([A-Za-z_]\w*)\s*\(", line):
-                self.function_definitions.append({"name": fn, "line": i, "file": self.file_name})
+    def _parse_function_definitions(self) -> None:
+        for func in re.findall(r"function\s+(\w+)\s*\(", self.file_content):
+            self.function_definitions.append({"name": func})
 
-    def _parse_arrow_functions(self):
-        for i, line in enumerate(self.file_content.splitlines(), start=1):
-            for name in re.findall(r"\b([A-Za-z_]\w*)\s*=\s*\([^)]*\)\s*=>", line):
-                self.arrow_functions.append({"name": name, "line": i, "file": self.file_name})
+    def _parse_arrow_functions(self) -> None:
+        for func in re.findall(r"(\w+)\s*=\s*\(\s*[^)]*\)\s*=>", self.file_content):
+            self.arrow_functions.append({"name": func})
 
-    def _parse_function_calls(self):
-        for i, line in enumerate(self.file_content.splitlines(), start=1):
-            for call in re.findall(r"\b([A-Za-z_]\w*)\s*\(", line):
-                self.function_calls.setdefault(call, []).append({"file": self.file_name, "line": i})
+    def _parse_function_calls(self) -> None:
+        for call in re.findall(r"(\w+)\s*\(", self.file_content):
+            self.function_calls.setdefault(call, []).append({"file": self.file_name})
 
-    def _parse_comments(self):
-        for i, line in enumerate(self.file_content.splitlines(), start=1):
-            m = re.search(r"//(.*)", line)
-            if m:
-                self.comments.append({"line": i, "comment": m.group(1).strip()})
-        for i, m in enumerate(re.findall(r"/\*.*?\*/", self.file_content, re.DOTALL), start=1):
-            self.comments.append({"line": i, "comment": m.strip()})
+    def _parse_comments(self) -> None:
+        for match in re.finditer(r"//(.*)", self.file_content):
+            line = self.file_content.count("\n", 0, match.start()) + 1
+            self.comments.append({"line": line, "comment": match.group(1).strip()})
+        for match in re.finditer(r"/\*.*?\*/", self.file_content, re.DOTALL):
+            line = self.file_content.count("\n", 0, match.start()) + 1
+            self.comments.append({"line": line, "comment": match.group(0).strip()})
 
-    def get_js_relations(self):
+    def get_js_relations(self) -> Dict[str, Any]:
         return {
             "defined": self.function_definitions,
             "arrow_functions": self.arrow_functions,
@@ -431,4 +343,41 @@ class JsParser:
 
 # ---------- Convenience facade for Django views/services ----------
 
+def parse_code(language: str, file_name: str, file_content: str, all_files: Dict[str, str] | None = None) -> Dict[str, Any]:
+    """
+    language: 'python' | 'c' | 'css' | 'html' | 'js'
+    all_files: optional mapping filename -> content for cross-file cases
+    """
+    lang = (language or "").strip().lower()
+    all_files = all_files or {}
+
+    if lang == "python":
+        parser = PythonParser(file_name, file_content)
+        parser.parse()
+        return parser.get_python_relations()
+    if lang == "c":
+        parser = CParser(file_name, file_content, all_files)
+        parser.parse()
+        return parser.get_c_relations()
+    if lang == "css":
+        parser = CssParser(file_name, file_content, all_files)
+        parser.parse()
+        return parser.get_css_relations()
+    if lang == "html":
+        parser = HtmlParser(file_name, file_content, all_files)
+        # Build CSS parsers if provided in all_files
+        css_parsers: List[CssParser] = []
+        for name, content in all_files.items():
+            if name.lower().endswith(".css"):
+                cp = CssParser(name, content, all_files)
+                cp.parse()
+                css_parsers.append(cp)
+        parser.parse(css_parsers)
+        return parser.get_html_relations()
+    if lang in ("js", "javascript"):
+        parser = JsParser(file_name, file_content, all_files)
+        parser.parse()
+        return parser.get_js_relations()
+
+    raise ValueError(f"Unsupported language: {language}")
 
